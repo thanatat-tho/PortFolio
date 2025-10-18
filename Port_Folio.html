@@ -25,6 +25,42 @@
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     document.body.appendChild(renderer.domElement);
 
+    // --- Loading overlay / fade-in effect ---
+    const overlay = document.createElement('div');
+    overlay.id = 'loading-overlay';
+    Object.assign(overlay.style, {
+      position: 'fixed',
+      left: '0',
+      top: '0',
+      width: '100vw',
+      height: '100vh',
+      background: '#000',
+      opacity: '1',
+      pointerEvents: 'none',
+      transition: 'opacity 1s ease',
+      zIndex: '9999'
+    });
+    document.body.appendChild(overlay);
+
+    // ปรับจำนวนไฟล์ glTF ที่จะโหลดตามที่มีในไฟล์นี้
+    let totalGLTF = 1; // <-- จำนวน gltfLoader.load calls ในไฟล์นี้
+    let loadedGLTF = 0;
+
+    function markLoaded(){
+      loadedGLTF++;
+      // console.log(`GLTF loaded ${loadedGLTF}/${totalGLTF}`);
+      if(loadedGLTF >= totalGLTF){
+        // all loaded -> fade out overlay
+        requestAnimationFrame(()=> {
+          overlay.style.opacity = '0';
+          overlay.addEventListener('transitionend', () => {
+            if(overlay.parentNode) overlay.parentNode.removeChild(overlay);
+          }, { once: true });
+        });
+      }
+    }
+    // --- end overlay ---
+
     const scene = new THREE.Scene();
 
     const exrLoader = new THREE.EXRLoader();
@@ -141,7 +177,70 @@
     directionalLight.castShadow = true;
     scene.add(directionalLight);
 
-      // GLTF Loader — ตัวอย่างการโหลดไฟล์ models/scene.gltf
+    // --- dat.GUI for light controls ---
+    const gui = new dat.GUI({ width: 300 });
+    const lightParams = {
+        ambientColor: '#ffffff',
+        ambientIntensity: ambientLight.intensity,
+        dirColor: '#ffffff',
+        dirIntensity: directionalLight.intensity,
+        dirX: directionalLight.position.x,
+        dirY: directionalLight.position.y,
+        dirZ: directionalLight.position.z,
+        castShadow: directionalLight.castShadow,
+        shadowMapSize: directionalLight.shadow && directionalLight.shadow.mapSize ? directionalLight.shadow.mapSize.x : 1024,
+        reset: () => {
+            // default values
+            lightParams.ambientColor = '#ffffff';
+            lightParams.ambientIntensity = 0.5;
+            lightParams.dirColor = '#ffffff';
+            lightParams.dirIntensity = 1.0;
+            lightParams.dirX = 5;
+            lightParams.dirY = 10;
+            lightParams.dirZ = 5;
+            lightParams.castShadow = true;
+            lightParams.shadowMapSize = 1024;
+
+            // apply
+            ambientLight.color.set(lightParams.ambientColor);
+            ambientLight.intensity = lightParams.ambientIntensity;
+            directionalLight.color.set(lightParams.dirColor);
+            directionalLight.intensity = lightParams.dirIntensity;
+            directionalLight.position.set(lightParams.dirX, lightParams.dirY, lightParams.dirZ);
+            directionalLight.castShadow = lightParams.castShadow;
+            if (directionalLight.shadow && directionalLight.shadow.mapSize) {
+                directionalLight.shadow.mapSize.set(lightParams.shadowMapSize, lightParams.shadowMapSize);
+                if (directionalLight.shadow.map) { directionalLight.shadow.map.dispose(); 
+                    directionalLight.shadow.map = null; }
+            }
+        }
+    };
+
+    // ambient controls
+    const ambFolder = gui.addFolder('Ambient Light');
+    ambFolder.addColor(lightParams, 'ambientColor').name('color').onChange(v => ambientLight.color.set(v));
+    ambFolder.add(lightParams, 'ambientIntensity', 0, 2, 0.01).name('intensity').onChange(v => ambientLight.intensity = v);
+    ambFolder.open();
+
+    // directional controls
+    const dirFolder = gui.addFolder('Directional Light');
+    dirFolder.addColor(lightParams, 'dirColor').name('color').onChange(v => directionalLight.color.set(v));
+    dirFolder.add(lightParams, 'dirIntensity', 0, 5, 0.01).name('intensity').onChange(v => directionalLight.intensity = v);
+    dirFolder.add(lightParams, 'dirX', -50, 50, 0.1).name('pos X').onChange(v => directionalLight.position.x = v);
+    dirFolder.add(lightParams, 'dirY', -50, 50, 0.1).name('pos Y').onChange(v => directionalLight.position.y = v);
+    dirFolder.add(lightParams, 'dirZ', -50, 50, 0.1).name('pos Z').onChange(v => directionalLight.position.z = v);
+    dirFolder.add(lightParams, 'castShadow').name('castShadow').onChange(v => directionalLight.castShadow = v);
+    dirFolder.add(lightParams, 'shadowMapSize', [256,512,1024,2048]).name('shadow map').onChange(v => {
+        if (directionalLight.shadow && directionalLight.shadow.mapSize) {
+        directionalLight.shadow.mapSize.set(v, v);
+        if (directionalLight.shadow.map) { directionalLight.shadow.map.dispose(); directionalLight.shadow.map = null; }
+        }
+    });
+    dirFolder.add(lightParams, 'reset').name('Reset lights');
+    dirFolder.open();
+    // --- end GUI ---
+
+    // GLTF Loader — ตัวอย่างการโหลดไฟล์ models/scene.gltf
     const gltfLoader = new THREE.GLTFLoader();
     gltfLoader.load('https://thanatat-tho.github.io/PortFolio/batcave_export.glb', // เปลี่ยนเป็นพาธ/URL ของโมเดลของคุณ
       (gltf) => {
@@ -165,10 +264,12 @@
         model.position.set(-1.0, 0.0, 0.0);
         model.scale.set(20.0, 20.0, 20.0);
         scene.add(model);
+        markLoaded();
       },
       undefined,
       (error) => {
         console.error('Error loading glTF:', error);
+        markLoaded();
       }
     );
     
@@ -475,7 +576,7 @@
     // --Celshading Sphere--
     const celuniforms = {  
       uTime: { value: 0.0 },
-      uLightDir: { value: new THREE.Vector3(5.0, 10.0, 5.0).normalize() },
+      uLightDir: { value: new THREE.Vector3(0.5, 1.0, 0.5).normalize() },
       uTex: { value: new THREE.TextureLoader().load('https://media.tenor.com/PWITGDAvNMkAAAAe/jonkler-baby.png') }
     };
 
