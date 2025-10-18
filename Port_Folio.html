@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>PortFolio</title>
+  <style>
+    body { margin: 0; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dat.gui@0.7.7/build/dat.gui.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>  
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/EXRLoader.js"></script>
+  <script>
+      
+    // Renderer
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.shadowMap.enabled = true; // ✅ เปิดใช้งานเงา!
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+
+    const exrLoader = new THREE.EXRLoader();
+        exrLoader.load(
+            "https://thanatat-tho.github.io/PortFolio/moonless_golf_1k.exr",
+            texture => {
+                texture.mapping = THREE.EquirectangularReflectionMapping;
+                scene.background = texture;
+                scene.environment = texture;
+                console.log("✅ EXR HDR โหลดเสร็จ");
+            },
+            undefined,
+            err => console.error("❌ โหลด EXR ไม่ได้", err)
+        );
+
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(-2.31, 1.83, 1.03);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.target.set(-2.6, 1.83, 1.03);
+    controls.enabledDamping = true;
+    controls.enableRotate = false; // ปิดการหมุน (rotate)
+    controls.enablePan = false;    // ปิดการแพน (pan)
+    
+    const clickable = [];
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    const clock = new THREE.Clock(false);
+    let isCameraMoving = false;
+    const moveStart = new THREE.Vector3();
+    const moveEnd = new THREE.Vector3();
+    const targetStart = new THREE.Vector3();
+    const targetEnd = new THREE.Vector3();
+    let moveProgress = 0;
+    let moveDuration = 1.0; // seconds (now mutable)
+
+    function getPointerNDC(evt){
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointer.x = ((evt.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((evt.clientY - rect.top) / rect.height) * 2 + 1;
+    }
+
+    function easeOutCubic(t){ return 1 - Math.pow(1 - t, 3); }
+
+    function onPointerDown(event){
+      getPointerNDC(event);
+      raycaster.setFromCamera(pointer, camera);
+      const intersects = raycaster.intersectObjects(clickable, true);
+      if(intersects.length > 0){
+        const hit = intersects[0].object;
+        // search up for userData.viewName
+        let node = hit;
+        let view = null;
+        while(node){
+          if(node.userData && node.userData.viewName){
+            view = node.userData.viewName;
+            break;
+          }
+          node = node.parent;
+        }
+
+      moveStart.copy(camera.position);
+        targetStart.copy(controls.target);
+        moveProgress = 0;
+        clock.start();
+        isCameraMoving = true;
+
+        if(view && VIEWS[view]){
+          moveEnd.copy(VIEWS[view].pos);
+          targetEnd.copy(VIEWS[view].tar);
+        } else {
+          // fallback: move near clicked object
+          const worldPos = new THREE.Vector3();
+          hit.getWorldPosition(worldPos);
+          moveEnd.copy(worldPos).add(new THREE.Vector3(0, 0.6, 1.5));
+          targetEnd.copy(worldPos);
+        }
+      }
+    } 
+
+    // Attach pointerdown so picking works
+    renderer.domElement.addEventListener('pointerdown', onPointerDown);
+
+    // พื้นขนาด 10x10
+    const planeGeometry = new THREE.PlaneGeometry(10, 10);
+    const planeMaterial = new THREE.MeshStandardMaterial({ color: 0x000000 });
+    planeMaterial.side = THREE.DoubleSide;
+    const plane = new THREE.Mesh(planeGeometry, planeMaterial);
+    plane.rotation.x = -Math.PI / 2; // หมุนให้เป็นพื้น
+    plane.position.y = -0.5;
+    plane.receiveShadow = true; // ✅ พื้นรับเงา
+    scene.add(plane);
+
+    // Environment map (cube) สำหรับ reflection ของ PBR
+    const cubeUrls = [
+      'https://threejs.org/examples/textures/cube/Bridge2/posx.jpg',
+      'https://threejs.org/examples/textures/cube/Bridge2/negx.jpg',
+      'https://threejs.org/examples/textures/cube/Bridge2/posy.jpg',
+      'https://threejs.org/examples/textures/cube/Bridge2/negy.jpg',
+      'https://threejs.org/examples/textures/cube/Bridge2/posz.jpg',
+      'https://threejs.org/examples/textures/cube/Bridge2/negz.jpg'
+    ];
+    const envMap = new THREE.CubeTextureLoader().load(cubeUrls);
+    envMap.encoding = THREE.sRGBEncoding;
+    scene.environment = envMap; // IBL
+
+    // แสง Ambient
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    scene.add(ambientLight);
+
+    // แสง Directional
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+    directionalLight.position.set(5, 10, 5);
+    directionalLight.castShadow = true;
+    scene.add(directionalLight);
+
+      // GLTF Loader — ตัวอย่างการโหลดไฟล์ models/scene.gltf
+    const gltfLoader = new THREE.GLTFLoader();
+    gltfLoader.load('https://thanatat-tho.github.io/PortFolio/batcave_export.glb', // เปลี่ยนเป็นพาธ/URL ของโมเดลของคุณ
+      (gltf) => {
+        const model = gltf.scene || gltf.scenes[0];
+        model.traverse((node) => {
+          if (node.isMesh) {
+            node.castShadow = true;
+            node.receiveShadow = true;
+            // ถ้าวัสดุเป็น MeshStandardMaterial ให้ใช้ envMap ของฉากเพื่อสะท้อน
+            if (node.material && (node.material.isMeshStandardMaterial || node.material.isMeshPhysicalMaterial)) {
+                node.material.envMap = envMap;
+                node.material.needsUpdate = true;
+            }
+            if (envMap && node.material && (node.material.isMeshStandardMaterial || node.material.isMeshPhysicalMaterial)) {
+              node.material.envMap = envMap;
+              node.material.needsUpdate = true;
+            }
+          }
+        });
+
+        model.position.set(-1.0, 0.0, 0.0);
+        model.scale.set(20.0, 20.0, 20.0);
+        scene.add(model);
+      },
+      undefined,
+      (error) => {
+        console.error('Error loading glTF:', error);
+      }
+    );
+    
+    gltfLoader.load('https://thanatat-tho.github.io/PortFolio/Nananananana_BATMAN.glb', // เปลี่ยนเป็นพาธ/URL ของโมเดลของคุณ
+      (gltf) => {
+        const model = gltf.scene || gltf.scenes[0];
+        model.traverse((node) => {
+          if (node.isMesh) {
+            node.castShadow = true;
+            node.receiveShadow = true;
+            // ถ้าวัสดุเป็น MeshStandardMaterial ให้ใช้ envMap ของฉากเพื่อสะท้อน
+            if (node.material && (node.material.isMeshStandardMaterial || node.material.isMeshPhysicalMaterial)) {
+                node.material.envMap = envMap;
+                node.material.needsUpdate = true;
+            }
+            if (envMap && node.material && (node.material.isMeshStandardMaterial || node.material.isMeshPhysicalMaterial)) {
+              node.material.envMap = envMap;
+              node.material.needsUpdate = true;
+            }
+          }
+        });
+
+        model.position.set(1.0, 0.2, 1.0);
+        model.scale.set(2.0, 2.0, 2.0);
+        scene.add(model);
+      },
+      undefined,
+      (error) => {
+        console.error('Error loading glTF:', error);
+      }
+    );
+
+    gltfLoader.load('https://thanatat-tho.github.io/PortFolio/Font.glb', // เปลี่ยนเป็นพาธ/URL ของโมเดลของคุณ
+      (gltf) => {
+        const name = gltf.scene || gltf.scenes[0];
+        name.traverse((node) => {
+          if (node.isMesh) {
+            node.castShadow = true;
+            node.receiveShadow = true;
+            // ถ้าวัสดุเป็น MeshStandardMaterial ให้ใช้ envMap ของฉากเพื่อสะท้อน
+            if (node.material && (node.material.isMeshStandardMaterial || node.material.isMeshPhysicalMaterial)) {
+                node.material.envMap = envMap;
+                node.material.needsUpdate = true;
+            }
+            if (envMap && node.material && (node.material.isMeshStandardMaterial || node.material.isMeshPhysicalMaterial)) {
+              node.material.envMap = envMap;
+              node.material.needsUpdate = true;
+            }
+          }
+        });
+
+        name.position.set(1.5, 2.4, -1.2);
+        name.scale.set(0.2, 0.2, 0.2);
+        scene.add(name);
+      },
+      undefined,
+      (error) => {
+        console.error('Error loading glTF:', error);
+      }
+    );
+
+    gltfLoader.load('https://thanatat-tho.github.io/PortFolio/FolioFile/about%20me.glb', // เปลี่ยนเป็นพาธ/URL ของโมเดลของคุณ
+      (gltf) => {
+        const aboutme = gltf.scene || gltf.scenes[0];
+        aboutme.traverse((node) => {
+          if (node.isMesh) {
+            node.castShadow = true;
+            node.receiveShadow = true;
+            // ถ้าวัสดุเป็น MeshStandardMaterial ให้ใช้ envMap ของฉากเพื่อสะท้อน
+            if (node.material && (node.material.isMeshStandardMaterial || node.material.isMeshPhysicalMaterial)) {
+                node.material.envMap = envMap;
+                node.material.needsUpdate = true;
+            }
+            if (envMap && node.material && (node.material.isMeshStandardMaterial || node.material.isMeshPhysicalMaterial)) {
+              node.material.envMap = envMap;
+              node.material.needsUpdate = true;
+            }
+          }
+        });
+        aboutme.position.set(-2.85, 1.59, 0.8);
+        aboutme.scale.set(0.3, 0.3, 0.3);
+        aboutme.rotation.y = Math.PI / 2;
+        scene.add(aboutme);
+        aboutme.userData.viewName = 'aboutme';
+        clickable.push(aboutme);
+      },
+      undefined,
+      (error) => {
+        console.error('Error loading glTF:', error);
+      }
+    );
+
+    gltfLoader.load('https://thanatat-tho.github.io/PortFolio/FolioFile/Material.glb', // เปลี่ยนเป็นพาธ/URL ของโมเดลของคุณ
+      (gltf) => {
+        const Material = gltf.scene || gltf.scenes[0];
+        Material.traverse((node) => {
+          if (node.isMesh) {
+            node.castShadow = true;
+            node.receiveShadow = true;
+            // ถ้าวัสดุเป็น MeshStandardMaterial ให้ใช้ envMap ของฉากเพื่อสะท้อน
+            if (node.material && (node.material.isMeshStandardMaterial || node.material.isMeshPhysicalMaterial)) {
+                node.material.envMap = envMap;
+                node.material.needsUpdate = true;
+            }
+            if (envMap && node.material && (node.material.isMeshStandardMaterial || node.material.isMeshPhysicalMaterial)) {
+              node.material.envMap = envMap;
+              node.material.needsUpdate = true;
+            }
+          }
+        });
+        Material.position.set(-2.85, 1.59, 1.6);
+        Material.scale.set(0.3, 0.3, 0.3);
+        Material.rotation.y = Math.PI / 2;
+        scene.add(Material);
+        Material.userData.viewName = 'Material';
+        clickable.push(Material);
+
+      },
+      undefined,
+      (error) => {
+        console.error('Error loading glTF:', error);
+      }
+    );
+
+    gltfLoader.load('https://thanatat-tho.github.io/PortFolio/FolioFile/back.glb', // เปลี่ยนเป็นพาธ/URL ของโมเดลของคุณ
+      (gltf) => {
+        const Backaboutme = gltf.scene || gltf.scenes[0];
+        Backaboutme.traverse((node) => {
+          if (node.isMesh) {
+            node.castShadow = true;
+            node.receiveShadow = true;
+            // ถ้าวัสดุเป็น MeshStandardMaterial ให้ใช้ envMap ของฉากเพื่อสะท้อน
+            if (node.material && (node.material.isMeshStandardMaterial || node.material.isMeshPhysicalMaterial)) {
+                node.material.envMap = envMap;
+                node.material.needsUpdate = true;
+            }
+            if (envMap && node.material && (node.material.isMeshStandardMaterial || node.material.isMeshPhysicalMaterial)) {
+              node.material.envMap = envMap;
+              node.material.needsUpdate = true;
+            }
+          }
+        });
+        Backaboutme.position.set(1.1, 2.4, -1.0);
+        Backaboutme.scale.set(0.3, 0.3, 0.3);
+        Backaboutme.rotation.y = Math.PI / 4;
+        scene.add(Backaboutme);
+        Backaboutme.userData.viewName = 'Backaboutme';
+        clickable.push(Backaboutme);
+      },
+      undefined,
+      (error) => {
+        console.error('Error loading glTF:', error);
+      }
+    );
+
+    gltfLoader.load('https://thanatat-tho.github.io/PortFolio/FolioFile/back.glb', // เปลี่ยนเป็นพาธ/URL ของโมเดลของคุณ
+      (gltf) => {
+        const Backmat1 = gltf.scene || gltf.scenes[0];
+        Backmat1.traverse((node) => {
+          if (node.isMesh) {
+            node.castShadow = true;
+            node.receiveShadow = true;
+            // ถ้าวัสดุเป็น MeshStandardMaterial ให้ใช้ envMap ของฉากเพื่อสะท้อน
+            if (node.material && (node.material.isMeshStandardMaterial || node.material.isMeshPhysicalMaterial)) {
+                node.material.envMap = envMap;
+                node.material.needsUpdate = true;
+            }
+            if (envMap && node.material && (node.material.isMeshStandardMaterial || node.material.isMeshPhysicalMaterial)) {
+              node.material.envMap = envMap;
+              node.material.needsUpdate = true;
+            }
+          }
+        });
+
+        Backmat1.position.set(-1.9, 1.3, 1.9);
+        Backmat1.scale.set(0.3, 0.3, 0.3);
+        Backmat1.rotation.y = Math.PI / 4;
+        scene.add(Backmat1);
+        Backmat1.userData.viewName = 'Backmat1';
+        clickable.push(Backmat1);     
+      },
+      undefined,
+      (error) => {
+        console.error('Error loading glTF:', error);
+      }
+    );
+
+    gltfLoader.load('https://thanatat-tho.github.io/PortFolio/FolioFile/Next.glb', // เปลี่ยนเป็นพาธ/URL ของโมเดลของคุณ
+      (gltf) => {
+        const Nextmat = gltf.scene || gltf.scenes[0];
+        Nextmat.traverse((node) => {
+          if (node.isMesh) {
+            node.castShadow = true;
+            node.receiveShadow = true;
+            // ถ้าวัสดุเป็น MeshStandardMaterial ให้ใช้ envMap ของฉากเพื่อสะท้อน
+            if (node.material && (node.material.isMeshStandardMaterial || node.material.isMeshPhysicalMaterial)) {
+                node.material.envMap = envMap;
+                node.material.needsUpdate = true;
+            }
+            if (envMap && node.material && (node.material.isMeshStandardMaterial || node.material.isMeshPhysicalMaterial)) {
+              node.material.envMap = envMap;
+              node.material.needsUpdate = true;
+            }
+          }
+        });
+
+        Nextmat.position.set(-1.9, 1.4, 1.9);
+        Nextmat.scale.set(0.3, 0.3, 0.3);
+        Nextmat.rotation.y = Math.PI / 4;
+        scene.add(Nextmat);
+        Nextmat.userData.viewName = 'Nextmat';
+        clickable.push(Nextmat);      
+      },
+      undefined,
+      (error) => {
+        console.error('Error loading glTF:', error);
+      }
+    );
+
+    gltfLoader.load('https://thanatat-tho.github.io/PortFolio/FolioFile/back.glb', // เปลี่ยนเป็นพาธ/URL ของโมเดลของคุณ
+      (gltf) => {
+        const Backmat2 = gltf.scene || gltf.scenes[0];
+        Backmat2.traverse((node) => {
+          if (node.isMesh) {
+            node.castShadow = true;
+            node.receiveShadow = true;
+            // ถ้าวัสดุเป็น MeshStandardMaterial ให้ใช้ envMap ของฉากเพื่อสะท้อน
+            if (node.material && (node.material.isMeshStandardMaterial || node.material.isMeshPhysicalMaterial)) {
+                node.material.envMap = envMap;
+                node.material.needsUpdate = true;
+            }
+            if (envMap && node.material && (node.material.isMeshStandardMaterial || node.material.isMeshPhysicalMaterial)) {
+              node.material.envMap = envMap;
+              node.material.needsUpdate = true;
+            }
+          }
+        });
+
+        Backmat2.position.set(1.0, 0.2, 1.2);
+        Backmat2.scale.set(0.3, 0.3, 0.3);
+        Backmat2.rotation.y = Math.PI / 4;
+        scene.add(Backmat2);
+        Backmat2.userData.viewName = 'Backmat2';
+        clickable.push(Backmat2);        
+      },
+      undefined,
+      (error) => {
+        console.error('Error loading glTF:', error);
+      }
+    );
+
+    const uniforms = { 
+    uTime: { value: 0.0 } ,
+    uHeight: { value: null } // texture ที่จะโหลดมา
+    };
+
+    // ---- Shaders (sample texture ใน vertex แล้วดัน pos.z) ----
+    const vert = `
+      uniform sampler2D uHeight;
+      uniform float uTime;
+
+      varying float vH;
+
+      void main(){
+        vec3 pos = position;
+        float h = texture2D(uHeight, uv).r * (sin(uTime) + 1.0);
+
+        pos.z = pos.z + (h * 0.2);
+
+        vH = h;                             
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+      }
+    `;
+    const frag = `
+      precision mediump float;
+      varying float vH;
+      void main(){
+        // ระบายสีตามความสูง: ดำ→น้ำเงิน→ฟ้า
+        gl_FragColor = vec4(0.2*vH, 0.5*vH + 0.2, 1.0*vH + 0.1, 1.0);
+      }
+    `;
+
+    new THREE.TextureLoader().load('https://png.pngtree.com/png-vector/20230420/ourmid/pngtree-batman-logo-with-grunge-texture-the-iconic-symbol-of-a-superhero-vector-png-image_51620968.jpg', (tex) => {
+
+    uniforms.uHeight.value = tex;
+    const geo = new THREE.PlaneBufferGeometry(2, 2, 100, 100);
+    const mat = new THREE.ShaderMaterial({
+      vertexShader: vert,
+      fragmentShader: frag,
+      uniforms: uniforms,
+      //wireframe: true, // เปิดถ้าอยากดูเส้นตาราง
+      side: THREE.DoubleSide
+       
+    });
+
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(-2.0, 1.3, 2.0);
+    mesh.scale.set(0.1, 0.1, 0.1);
+    //mesh.rotation.x = -Math.PI / 2; // หมุนให้เป็นพื้น
+    mesh.rotation.y = Math.PI / 4;
+    scene.add(mesh);
+    });
+
+    // --Celshading Sphere--
+    const celuniforms = {  
+      uTime: { value: 0.0 },
+      uLightDir: { value: new THREE.Vector3(5.0, 10.0, 5.0).normalize() },
+      uTex: { value: new THREE.TextureLoader().load('https://media.tenor.com/PWITGDAvNMkAAAAe/jonkler-baby.png') }
+    };
+
+    const celVert = `
+      uniform float uTime;
+      varying vec3 vNormal;
+      varying vec3 vPosW;
+      varying vec2 vUv; 
+
+      void main(){
+        vNormal = normalize(mat3(modelMatrix) * normal);
+        vec3 pos = position;
+        vUv = uv;
+        vPosW   = ( modelMatrix * vec4(pos, 1.0)).xyz;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+      }
+    `;
+    const celFrag = `
+      precision mediump float;
+      varying vec3 vNormal;
+      uniform vec3 uLightDir;
+      varying vec3 vPosW;
+      varying vec2 vUv;
+      uniform sampler2D uTex;
+
+      void main()
+      {
+        float diffuse = clamp(dot(vNormal, uLightDir), 0.0, 1.0);
+        float levels = 3.0;                        
+        diffuse   = floor(diffuse * levels) / levels;
+        diffuse  += 0.6;
+
+        vec3 R = reflect(-uLightDir, vNormal);
+        vec3 V = normalize(cameraPosition - vPosW);
+        float specular = max( pow( dot(R,V), 8.0 ) , 0.0);
+        //specular = step(0.5, specular);
+        specular = smoothstep(0.4, 0.5, specular);
+        if(diffuse <= 0.5) 
+          specular = 0.0;
+        vec3 base  =  texture2D(uTex, vUv).rgb;      
+        vec3 color = (base  * diffuse) + vec3(specular);
+        gl_FragColor = vec4(color, 1.0);
+    }
+    `;
+
+    const celGeo = new THREE.SphereGeometry(0.5, 64, 32);
+    const celMat = new THREE.ShaderMaterial({
+      vertexShader: celVert,
+      fragmentShader: celFrag,
+      uniforms: celuniforms
+    });
+
+    const celMesh = new THREE.Mesh(celGeo, celMat);
+    celMesh.position.set(-2.0, 1.5, 2.0);
+    celMesh.scale.set(0.2, 0.2, 0.2);
+    celMesh.rotation.y = Math.PI / -4;
+    scene.add(celMesh);
+
+    const VIEWS = {
+      aboutme: { pos: new THREE.Vector3(1.59, 2.48, -0.85), tar: new THREE.Vector3(1.46, 2.51, -1.17) },
+      Backaboutme: { pos: new THREE.Vector3(-2.31, 1.83, 1.03), tar: new THREE.Vector3(-2.6, 1.83, 1.03) },
+      Material: { pos: new THREE.Vector3(-1.7, 1.44, 2.31), tar: new THREE.Vector3(-1.98, 1.39, 2.06) },
+      Backmat1: { pos: new THREE.Vector3(-2.31, 1.83, 1.03), tar: new THREE.Vector3(-2.6, 1.83, 1.03) },
+      Nextmat: { pos: new THREE.Vector3(1.62, 0.7, 1.6), tar: new THREE.Vector3(1.09, 0.57, 0.89) },
+      Backmat2: { pos: new THREE.Vector3(-1.7, 1.44, 2.31), tar: new THREE.Vector3(-1.98, 1.39, 2.06) }
+    }
+
+    // Render loop
+    addEventListener('resize', ()=>{
+    camera.aspect = innerWidth/innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+    });
+
+    (function loop(){
+      // update time
+      uniforms.uTime.value += 0.05;
+      // advance camera move if active
+      const delta = clock.getDelta();
+      if(isCameraMoving){
+        moveProgress += delta / moveDuration;
+        let t = Math.min(moveProgress, 1.0);
+        t = easeOutCubic(t);
+        camera.position.lerpVectors(moveStart, moveEnd, t);
+        controls.target.lerpVectors(targetStart, targetEnd, t);
+        controls.update();
+        if(moveProgress >= 1.0){
+          isCameraMoving = false;
+          clock.stop();
+          camera.position.copy(moveEnd);
+          controls.target.copy(targetEnd);
+          controls.update();
+        }
+      } else {
+        controls.update();
+      }
+
+      renderer.render(scene, camera);
+      requestAnimationFrame(loop);
+    })();
+
+  </script>
+</body>
+</html>
